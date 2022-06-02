@@ -1,0 +1,204 @@
+ Select * into #Claims from #Claims1 C  
+ Where (  
+   @SearchText = ''       
+    OR  rtrim(ltrim(isnull(convert(varchar(10),cast(Cost as decimal(10, 2))),'0.00'))) like (  replace(replace(@SearchText,',',''),'$',''))             
+  OR c.Patient_ID LIKE '%' + @SearchText + '%'          
+  OR c.ClaimId LIKE '%' + @SearchText + '%'          
+  OR CONVERT(VARCHAR(10), c.ClaimDateStr, 101) LIKE '%' + @SearchText + '%'          
+  OR CONVERT(VARCHAR(10), c.ClaimFromDate, 101) LIKE '%' + @SearchText + '%'          
+  OR CONVERT(VARCHAR(10), c.ClaimThruDate, 101) LIKE '%' + @SearchText + '%'          
+OR c.FacilityName LIKE '%' + @SearchText + '%'          
+  OR c.ClaimsPhysicianName LIKE '%' + @SearchText + '%'          
+  OR c.ClaimPhysicianSpeciality LIKE '%' + @SearchText + '%'          
+  OR c.HCPCSCode LIKE '%' + @SearchText + '%'          
+  OR c.HCCCode LIKE '%' + @SearchText + '%'          
+  OR c.ICDCode LIKE '%' + @SearchText + '%'          
+  OR c.POS LIKE '%' + @SearchText + '%'          
+  OR c.RevenueCode LIKE '%' + @SearchText + '%'          
+ ) 
+
+
+ /****************************************************************************************************************            
+* Bridge Application : Insights                    *            
+* Script for   : To run Top 10% Benficiaries - Widget & Patient level view        *            
+* Client Name   : ALL                     *            
+* Payer    : ALL                     *            
+* Environment   : Genome                    *            
+* Genome Version  : V1.4.2                    *            
+* Created by   : TY                     *            
+* Created Date  : 2020-05-19                   *            
+* Modified by   : NR                     *            
+* Modified Date  : 2020-07-05                   *            
+*   Modified by   : TY                     *            
+*   Modified Date  : 2020-10-30                   *            
+**************************************************************************************************************/            
+---- Report : Top 10% Benficiaries - Widget and Patient Level View            
+---- V1.4.2 2020-10-30 (TY) : Fix pagination error            
+            
+CREATE  PROCEDURE [dbo].[GetTopExpenditurePatients_b]            
+ @FromYear int,            
+ @ToYear int,            
+ @FromMonth int=-1,            
+ @ToMonth int=-1,            
+ @BuildType nvarchar(32)='ACO',            
+ @PlanType nvarchar(32) = NULL,            
+ @PracticeId uniqueidentifier = NULL,            
+ @PhysicianId uniqueidentifier = NULL,             
+ @RegionId UNIQUEIDENTIFIER = NULL,            
+ @AccountId uniqueidentifier = NULL,            
+ @IsAssignable nvarchar(100) = NULL,            
+ @Start INT = 0,            
+ @Length INT = 0,            
+ @SearchText NVARCHAR(100)='',            
+ @SortColumnName NVARCHAR(30),            
+ @SortDirection NVARCHAR(10) = 'asc',        
+ @ClaimsPhysicianID UNIQUEIDENTIFIER = NULL        
+         
+AS            
+BEGIN            
+          
+            
+ ---- Handle assignable population            
+ DECLARE @FinalAssignment BIT = 1 - ISNULL(@IsAssignable, 0);            
+            
+ DECLARE @Year INT = @FromYear            
+  IF EXISTS (Select [Year] from YearConfiguration where Id = @Year)          
+        SET @Year = (Select [Year] from YearConfiguration where Id = @Year)          
+    ELSE           
+        SET @Year = [dbo].[GETYEAREX]()          
+ ---- Apply security and user filter on gen.Dim_Patients_View_By_Year : #Patients_By_User            
+ SELECT * INTO #Patients_By_User FROM gen.Get_Patients_By_User (@Year, @AccountId);            
+            
+ WITH TOP_TEN_PERCENT AS             
+ (            
+  SELECT             
+            
+   pu.Bridge_Patient_ID PatientId            
+   , p.Patient_ID            
+   , convert(decimal(23,2),Cost  )  as  Cost     
+   --,CONVERT(VARCHAR(100),FORMAT(ISNULL(Cost,0) ,'C', 'en-us'))  as Cost  
+   , PERCENT_RANK() OVER(ORDER BY Cost DESC) AS Pct_Rank            
+  -- INTO #Top_10_Percent            
+  FROM gen.Dim_Patients_Ranked_By_Cost p             
+  INNER JOIN #Patients_By_User pu ON pu.Patient_ID = p.Patient_ID            
+  WHERE p.Reporting_Year =@Year            
+ )            
+            
+ SELECT --TOP (SELECT CAST(ROUND(COUNT(*)*0.1,0) AS INT) FROM TOP_TEN_PERCENT)             
+  p.HICN            
+  ,p. MBI            
+  , a.PatientId            
+  , p.LastNameEncrypted             
+  , p.DateOfBirth            
+  , a.Cost     
+  , p.ICDCode             
+  , p.HCCCode             
+  , p.PlaceOfServiceCode            
+  , p.HCCCodeDescription             
+  , p.ICDCodeDescription             
+  , p.HCPCSCodeDescription             
+  , p.PracticeName             
+  , p.HCPCSCode             
+  , p.RevenueCode             
+  , p.PhysicianLastNameEncrypted            
+            
+   into #top10percentpatients        
+ FROM TOP_TEN_PERCENT a            
+ LEFT JOIN gen.Dim_Patients_Ranked_By_Cost p ON a.Patient_ID = p.Patient_ID AND p.Reporting_Year = @Year            
+ WHERE Pct_Rank < .1;            
+            
+    IF @SortColumnName = 'HCPCSCodeDescription'     
+  SET @SortColumnName = NULL;            
+            
+ DECLARE @Orderbyvar VARCHAR(MAX);            
+ SELECT @Orderbyvar =             
+              
+  CASE            
+            
+   WHEN @SortColumnName = 'HICN' AND @SortDirection = 'asc' THEN 'HICN ASC'              
+   WHEN @SortColumnName = 'HICN' AND @SortDirection = 'desc' THEN 'HICN DESC'             
+            
+   WHEN @SortColumnName = 'Cost' AND @SortDirection = 'asc' THEN 'Cost ASC'             
+   WHEN @SortColumnName = 'Cost' AND @SortDirection = 'desc' THEN 'Cost  DESC'              
+               
+   WHEN @SortColumnName = 'LastName' AND @SortDirection = 'asc' THEN 'LastNameEncrypted  ASC'              
+   WHEN @SortColumnName = 'LastName' AND @SortDirection = 'desc' THEN 'LastNameEncrypted  DESC'            
+            
+   WHEN @SortColumnName = 'PracticeName' AND @SortDirection = 'asc' THEN 'PracticeName ASC'              
+   WHEN @SortColumnName = 'PracticeName' AND @SortDirection = 'desc' THEN 'PracticeName DESC'             
+            
+   WHEN @SortColumnName = 'MBI' AND @SortDirection = 'asc' THEN 'MBI ASC'              
+   WHEN @SortColumnName = 'MBI' AND @SortDirection = 'desc' THEN 'MBI DESC'            
+            
+   WHEN @SortColumnName = 'DateOfBirth' AND @SortDirection = 'asc' THEN 'DateOfBirth  ASC'              
+   WHEN @SortColumnName = 'DateOfBirth' AND @SortDirection = 'desc' THEN 'DateOfBirth  DESC'            
+            
+   WHEN @SortColumnName = 'PhysicianLastName' AND @SortDirection = 'asc' THEN 'PhysicianLastNameEncrypted ASC'              
+   WHEN @SortColumnName = 'PhysicianLastName' AND @SortDirection = 'desc' THEN 'PhysicianLastNameEncrypted DESC'            
+            
+            
+   WHEN @SortColumnName = 'CostString' AND @SortDirection = 'asc' THEN 'Cost ASC'            
+   WHEN @SortColumnName = 'CostString' AND @SortDirection = 'desc' THEN 'Cost DESC'              
+            
+   WHEN @SortColumnName = 'RevenueCode' AND @SortDirection = 'asc' THEN 'RevenueCode ASC'              
+   WHEN @SortColumnName = 'RevenueCode' AND @SortDirection = 'desc' THEN 'RevenueCode DESC'            
+            
+   WHEN @SortColumnName = 'HCPCSCodes' AND @SortDirection = 'asc' THEN 'HCPCSCodes ASC'            
+   WHEN @SortColumnName = 'HCPCSCodes' AND @SortDirection = 'desc' THEN 'HCPCSCodes DESC'              
+            
+   WHEN @SortColumnName = 'ICDCodes' AND @SortDirection = 'asc' THEN 'ICDCodes ASC'            
+   WHEN @SortColumnName = 'ICDCodes' AND @SortDirection = 'desc' THEN 'ICDCodes DESC'              
+            
+   WHEN @SortColumnName = 'HCCCodes' AND @SortDirection = 'asc' THEN 'HCCCode ASC'            
+   WHEN @SortColumnName = 'HCCCodes' AND @SortDirection = 'desc' THEN 'HCCCode DESC'              
+            
+   WHEN @SortColumnName = 'PhysicianName' AND @SortDirection = 'asc' THEN 'PhysicianName ASC'              
+   WHEN @SortColumnName = 'PhysicianName' AND @SortDirection = 'desc' THEN 'PhysicianName DESC'             
+                
+   ELSE 'LastNameEncrypted'                
+  END;            
+        
+  DECLARE @table VARCHAR(40) = '#top10percentpatients '; 
+          
+    ---- Appy Search text filters : @Delete_Non_Search_Result_SQL 
+	select * from  #top10percentpatients where 
+	@SearchText = ''
+	or    
+ --IF LEN(@SearchText) > 0        
+ --BEGIN        
+ -- DECLARE @Delete_Non_Search_Result_SQL NVARCHAR(MAX) = 'DELETE FROM ' + @table + ' WHERE LEN(''' + @SearchText + ''') > 0 ';        
+ -- SELECT        
+ --  @Delete_Non_Search_Result_SQL =        
+ --  ISNULL(@Delete_Non_Search_Result_SQL, '') + '        
+ --  AND ' + t.Column_Name + ' NOT LIKE ''%' + @SearchText + '%'''        
+ -- FROM         
+ -- (        
+ --  ---- Getting all column name from temp table        
+ --  SELECT DISTINCT name AS Column_Name FROM tempdb.sys.columns WHERE object_id = OBJECT_ID('tempdb..'+ @table)        
+ -- )t        
+ -- ORDER BY t.Column_Name;        
+        
+ -- EXECUTE (@Delete_Non_Search_Result_SQL);        
+ --END;       
+  DECLARE @Totalcount VARCHAR(20) = ( SELECT COUNT(*) FROM   #top10percentpatients );            
+ DECLARE @Pagesize INT = @Length;            
+ DECLARE @Startstring VARCHAR(20) = CONVERT(VARCHAR(20), @Start);            
+ DECLARE @Pagesizestring VARCHAR(20) = CONVERT(VARCHAR(20), @Pagesize);            
+   IF(@Totalcount =0)        
+  BEGIN SET @Totalcount=10 END         
+ DECLARE @SQLvarchar VARCHAR(MAX);             
+ SELECT @SQLvarchar =             
+ '            
+  SELECT *, ' + @Totalcount + ' AS TotalRecordsCount             
+  FROM ' + @table + '             
+  ORDER BY ' + @Orderbyvar + '                    
+ OFFSET '+ @Startstring +' ROWS            
+ FETCH NEXT CASE WHEN '+ @Pagesizestring +'=0 THEN '+ @Totalcount +' ELSE '+@Pagesizestring+' END ROWS ONLY               
+ ';             
+            
+    PRINT @SQLvarchar            
+ EXEC(@SQLvarchar);               
+              
+END;   
+
+
